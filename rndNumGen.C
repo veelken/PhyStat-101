@@ -10,6 +10,7 @@
 #include <TPad.h>
 #include <TRandom.h>
 #include <TRandom3.h>
+#include <TROOT.h> // gROOT
 
 #include <string>
 
@@ -55,7 +56,7 @@ double normal(double x, double mZ, double sigma)
 
 double normal_fcn(double* x, double* par)
 {
-  return normal(x[0], par[0], par[1]);
+  return par[0]*normal(x[0], par[1], par[2]);
 }
 //---------------------------------------------------------------------------------------------------
 
@@ -109,6 +110,25 @@ void fillHistogram_inverse_transform_sampling(TH1* histogram, TRandom& rnd, int 
     histogram->Scale(1./histogram->Integral());
   }
   delete graph_inverse_cdf;
+}
+
+void fillHistogram_rndSum(TH1* histogram, TRandom& rnd, int numToys, double xMin, double xMax, double mZ, double sigma)
+{
+  const int N = 100;
+  double range = TMath::Sqrt(12.*N)*sigma;
+  double a = mZ - 0.5*range;
+  double b = mZ + 0.5*range;
+  for ( int idxToy = 0; idxToy < numToys; ++idxToy ) {
+    double sum = 0.;
+    for ( int i = 0; i < N; ++i ) {
+      sum += a + (b - a)*rnd.Rndm();
+    }
+    double x = sum/N;
+    histogram->Fill(x);
+  }
+  if ( histogram->Integral() > 0. ) {
+    histogram->Scale(1./histogram->Integral());
+  }
 }
 
 //---------------------------------------------------------------------------------------------------
@@ -169,6 +189,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
 		    TH1* histogram_ref, const std::string& legendEntry_ref,
 		    TH1* histogram1, const std::string& legendEntry1,
 		    TH1* histogram2, const std::string& legendEntry2,
+		    TH1* histogram3, const std::string& legendEntry3,
 		    TF1* function, const std::string& legendEntry_function,
 		    const std::string& xAxisTitle, double xAxisOffset,
 		    bool useLogScale, double yMin, double yMax, const std::string& yAxisTitle, double yAxisOffset,
@@ -233,6 +254,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   TAxis* yAxis_top = histogram_ref->GetYaxis();
   yAxis_top->SetTitle(yAxisTitle.data());
   yAxis_top->SetTitleOffset(yAxisOffset);
+  yAxis_top->SetTitleSize(0.065);
 
   TGraphAsymmErrors* graph1 = nullptr;
   if ( histogram1 ) {
@@ -242,26 +264,39 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
     histogram1->SetMarkerStyle(markerStyles[1]);
     histogram1->SetMarkerSize(markerSizes[1]);
     //histogram1->Draw("e1psame");
-    graph1 = convertToGraph(histogram1, -0.15);
+    graph1 = convertToGraph(histogram1, -0.25);
     graph1->Draw("P");
     legend->AddEntry(histogram1, legendEntry1.data(), "p");
   }
   
   TGraphAsymmErrors* graph2 = nullptr;
-  if ( histogram1 ) {
+  if ( histogram2 ) {
     histogram2->SetLineColor(colors[2]);
     histogram2->SetLineWidth(1);
     histogram2->SetMarkerColor(colors[2]);
     histogram2->SetMarkerStyle(markerStyles[2]);
     histogram2->SetMarkerSize(markerSizes[2]);
     //histogram2->Draw("e1psame");
-    graph2 = convertToGraph(histogram2, +0.15);
+    graph2 = convertToGraph(histogram2, 0.);
     graph2->Draw("P");
     legend->AddEntry(histogram2, legendEntry2.data(), "p");
   }
 
+  TGraphAsymmErrors* graph3 = nullptr;
+  if ( histogram3 ) {
+    histogram3->SetLineColor(colors[3]);
+    histogram3->SetLineWidth(1);
+    histogram3->SetMarkerColor(colors[3]);
+    histogram3->SetMarkerStyle(markerStyles[3]);
+    histogram3->SetMarkerSize(markerSizes[3]);
+    //histogram3->Draw("e1psame");
+    graph3 = convertToGraph(histogram3, +0.25);
+    graph3->Draw("P");
+    legend->AddEntry(histogram3, legendEntry3.data(), "p");
+  }
+
   if ( function ) {
-    function->SetLineColor(colors[3]);
+    function->SetLineColor(colors[4]);
     function->SetLineWidth(2);
     function->Draw("same");
   }
@@ -283,7 +318,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   xAxis_bottom->SetTitle(xAxis_top->GetTitle());
   xAxis_bottom->SetLabelColor(1);
   xAxis_bottom->SetTitleColor(1);
-  xAxis_bottom->SetTitleOffset(1.20);
+  xAxis_bottom->SetTitleOffset(xAxisOffset);
   xAxis_bottom->SetTitleSize(0.08);
   xAxis_bottom->SetLabelOffset(0.02);
   xAxis_bottom->SetLabelSize(0.08);
@@ -313,7 +348,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
     std::string histogramName_ratio1 = std::string(histogram1->GetName()).append("_div_").append(histogram_ref->GetName());
     histogram_ratio1 = compRatioHistogram(histogramName_ratio1, histogram1, histogram_ref);
     //histogram_ratio1->Draw("e1psame");
-    graph_ratio1 = convertToGraph(histogram_ratio1);
+    graph_ratio1 = convertToGraph(histogram_ratio1, -0.25);
     graph_ratio1->Draw("P");
   }
 
@@ -323,8 +358,18 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
     std::string histogramName_ratio2 = std::string(histogram2->GetName()).append("_div_").append(histogram_ref->GetName());
     histogram_ratio2 = compRatioHistogram(histogramName_ratio2, histogram2, histogram_ref);
     //histogram_ratio2->Draw("e1psame");
-    graph_ratio2 = convertToGraph(histogram_ratio2);
+    graph_ratio2 = convertToGraph(histogram_ratio2, 0.);
     graph_ratio2->Draw("P");
+  }
+
+  TH1* histogram_ratio3 = nullptr;
+  TGraphAsymmErrors* graph_ratio3 = nullptr;
+  if ( histogram3 ) {
+    std::string histogramName_ratio3 = std::string(histogram3->GetName()).append("_div_").append(histogram_ref->GetName());
+    histogram_ratio3 = compRatioHistogram(histogramName_ratio3, histogram3, histogram_ref);
+    //histogram_ratio3->Draw("e1psame");
+    graph_ratio3 = convertToGraph(histogram_ratio3, +0.25);
+    graph_ratio3->Draw("P");
   }
 
   histogram_ratio_ref->Draw("axissame");
@@ -342,12 +387,15 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   delete legend;
   delete graph1;
   delete graph2;
+  delete graph3;
   delete histogram_ratio_ref;
   delete graph_line;
   delete histogram_ratio1;
   delete graph_ratio1;
   delete histogram_ratio2;
   delete graph_ratio2;
+  delete histogram_ratio3;
+  delete graph_ratio3;
   delete topPad;
   delete bottomPad;
   delete canvas;  
@@ -360,8 +408,8 @@ void rndNumGen()
   gROOT->SetBatch(true);
 
   // define binning
-  // (60 bins from 60 to 120 GeV)
-  int numBins = 60;
+  // (30 bins from 60 to 120 GeV)
+  int numBins = 30;
   double xMin =  60.; // GeV
   double xMax = 120.; // GeV
 
@@ -371,8 +419,9 @@ void rndNumGen()
   double width =  4.5; // GeV (includes intrinsic width of Z boson + experimental resolution)
 
   TF1* function_Gaussian = new TF1("function_Gaussian", normal_fcn, xMin, xMax, 2);
-  function_Gaussian->SetParameter(0, mZ);
-  function_Gaussian->SetParameter(1, width);
+  function_Gaussian->SetParameter(0, (xMax - xMin)/numBins);
+  function_Gaussian->SetParameter(1, mZ);
+  function_Gaussian->SetParameter(2, width);
 
   TH1* histogram_Erf = bookHistogram("histogram_Erf", "Exact solution", numBins, xMin, xMax);
   fillHistogram_Erf(histogram_Erf, mZ, width);
@@ -386,13 +435,17 @@ void rndNumGen()
   TH1* histogram_inverse_transform = bookHistogram("histogram_inverse_transform", "Inverse-transform sampling", numBins, xMin, xMax);
   fillHistogram_inverse_transform_sampling(histogram_inverse_transform, rnd, numToys, xMin, xMax, mZ, width);
 
+  TH1* histogram_rndSum = bookHistogram("histogram_rndSum", "#Sigma u", numBins, xMin, xMax);
+  fillHistogram_rndSum(histogram_rndSum, rnd, numToys, xMin, xMax, mZ, width);
+
   showHistograms(800, 900,
 		 histogram_Erf, "Exact solution",
 		 histogram_rejection, "Rejection sampling", 
 		 histogram_inverse_transform, "Inverse-transform sampling", 
+		 histogram_rndSum, "#Sigma u", 
 		 function_Gaussian, "Gaussian",
-		 "Mass [GeV]", 1.10,
-		 true, 1.e-6, 7.9e0, "Toys", 1.30,
+		 "Mass [GeV]", 1.30,
+		 true, 1.e-6, 1.9e+1, "Toys", 1.15,
 		 0.51, 0.74,
 		 "rndNumGen.png");
 
@@ -400,4 +453,5 @@ void rndNumGen()
   delete histogram_Erf;
   delete histogram_rejection;
   delete histogram_inverse_transform;
+  delete histogram_rndSum;
 }
