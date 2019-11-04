@@ -92,41 +92,44 @@ double sum_fcn(double* x, double* par)
   return par[0]*normal(x[0], par[1], par[2]) + par[3]*TMath::Exp(-par[4]*(x[0] - par[5]));
 }
 
-void fillHistogram_gauss(TH1* histogram, TRandom& rnd, int numToys, double xMin, double xMax, double mZ, double sigma)
+double normal_cdf(double x, double mZ, double sigma)
 {
-  double yMax = normal(mZ, mZ, sigma);
-  int idxToy = 0;
-  while ( idxToy < numToys ) {
-    bool isSelectedToy = false;
-    double x;
-    while ( !isSelectedToy ) {
-      x = xMin + (xMax - xMin)*rnd.Rndm();
-      double y = rnd.Rndm()*yMax;
-      if ( y < normal(x, mZ, sigma) ) {
-	isSelectedToy = true;
-      }
-    }
-    histogram->Fill(x);
-    ++idxToy;
+  double t = TMath::Sqrt(0.5)*(x - mZ)/sigma;
+  return 0.5*TMath::Erf(t);
+}
+
+void fillHistogram_gauss_cdf(TH1* histogram, int numEvents, double mZ, double sigma)
+{
+  const TAxis* xAxis = histogram->GetXaxis();
+  int numBins = xAxis->GetNbins();
+  for ( int idxBin = 1; idxBin <= numBins; ++idxBin ) {
+    double binEdge_hi = xAxis->GetBinUpEdge(idxBin);
+    double binEdge_lo = xAxis->GetBinLowEdge(idxBin);
+    double integral = normal_cdf(binEdge_hi, mZ, sigma) - normal_cdf(binEdge_lo, mZ, sigma);
+    histogram->SetBinContent(idxBin, integral);
+    histogram->SetBinError(idxBin, 0.);
+  }
+  if ( histogram->Integral() > 0. ) {
+    histogram->Scale(numEvents/histogram->Integral());
   }
 }
 
-void fillHistogram_exp(TH1* histogram, TRandom& rnd, int numToys, double xMin, double xMax, double lambda)
+void fillHistogram_exp_cdf(TH1* histogram, int numEvents, double lambda)
 {
-  double yMax = 1.;
-  int idxToy = 0;
-  while ( idxToy < numToys ) {
-    bool isSelectedToy = false;
-    double x;
-    while ( !isSelectedToy ) {
-      x = xMin + (xMax - xMin)*rnd.Rndm();
-      double y = rnd.Rndm()*yMax;
-      if ( y < TMath::Exp(-lambda*(x - xMin)) ) {
-	isSelectedToy = true;
-      }
-    }
-    histogram->Fill(x);
-    ++idxToy;
+  assert(lambda > 0.);
+  const TAxis* xAxis = histogram->GetXaxis();
+  double xMin = xAxis->GetBinLowEdge(1);
+  std::cout << "xMin = " << xMin << std::endl;
+  int numBins = xAxis->GetNbins();
+  for ( int idxBin = 1; idxBin <= numBins; ++idxBin ) {
+    double binEdge_hi = xAxis->GetBinUpEdge(idxBin);
+    double binEdge_lo = xAxis->GetBinLowEdge(idxBin);
+    double integral = (-1./lambda)*(TMath::Exp(-lambda*(binEdge_hi - xMin)) - TMath::Exp(-lambda*(binEdge_lo - xMin)));
+    histogram->SetBinContent(idxBin, integral);
+    histogram->SetBinError(idxBin, 0.);
+  }
+  if ( histogram->Integral() > 0. ) {
+    histogram->Scale(numEvents/histogram->Integral());
   }
 }
 
@@ -227,7 +230,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   int markerStyles[6] = { 24, 21, 20, 21, 22, 23 };
   int markerSizes[6] = { 1, 1, 1, 1, 1, 1 };
 
-  TLegend* legend = new TLegend(legendX0, legendY0, legendX0 + 0.26, legendY0 + 0.20, "", "brNDC"); 
+  TLegend* legend = new TLegend(legendX0, legendY0, legendX0 + 0.26, legendY0 + 0.23, "", "brNDC"); 
   legend->SetBorderSize(0);
   legend->SetFillColor(0);
   legend->SetTextSize(0.045);
@@ -258,27 +261,23 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   TGraphAsymmErrors* graph1 = nullptr;
   if ( histogram1 ) {
     histogram1->SetLineColor(colors[1]);
-    histogram1->SetLineWidth(1);
+    histogram1->SetLineWidth(2);
     histogram1->SetMarkerColor(colors[1]);
     histogram1->SetMarkerStyle(markerStyles[1]);
     histogram1->SetMarkerSize(markerSizes[1]);
-    //histogram1->Draw("e1psame");
-    graph1 = convertToGraph(histogram1, -0.25);
-    graph1->Draw("P");
-    legend->AddEntry(histogram1, legendEntry1.data(), "p");
+    histogram1->Draw("histsame");
+    legend->AddEntry(histogram1, legendEntry1.data(), "l");
   }
   
   TGraphAsymmErrors* graph2 = nullptr;
   if ( histogram2 ) {
     histogram2->SetLineColor(colors[2]);
-    histogram2->SetLineWidth(1);
+    histogram2->SetLineWidth(2);
     histogram2->SetMarkerColor(colors[2]);
     histogram2->SetMarkerStyle(markerStyles[2]);
     histogram2->SetMarkerSize(markerSizes[2]);
-    //histogram2->Draw("e1psame");
-    graph2 = convertToGraph(histogram2, 0.);
-    graph2->Draw("P");
-    legend->AddEntry(histogram2, legendEntry2.data(), "p");
+    histogram2->Draw("histsame");
+    legend->AddEntry(histogram2, legendEntry2.data(), "l");
   }
 
   TGraphAsymmErrors* graph3 = nullptr;
@@ -341,26 +340,6 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   graph_line->SetLineWidth(1);
   graph_line->Draw("L");
 
-  //TH1* histogram_ratio1 = nullptr;
-  //TGraphAsymmErrors* graph_ratio1 = nullptr; 
-  //if ( histogram1 ) {
-  //  std::string histogramName_ratio1 = std::string(histogram1->GetName()).append("_div_").append(histogram_ref->GetName());
-  //  histogram_ratio1 = compRatioHistogram(histogramName_ratio1, histogram1, histogram_ref);
-  //  //histogram_ratio1->Draw("e1psame");
-  //  graph_ratio1 = convertToGraph(histogram_ratio1, -0.25);
-  //  graph_ratio1->Draw("P");
-  //}
-  //
-  //TH1* histogram_ratio2 = nullptr;
-  //TGraphAsymmErrors* graph_ratio2 = nullptr;
-  //if ( histogram2 ) {
-  //  std::string histogramName_ratio2 = std::string(histogram2->GetName()).append("_div_").append(histogram_ref->GetName());
-  //  histogram_ratio2 = compRatioHistogram(histogramName_ratio2, histogram2, histogram_ref);
-  //  //histogram_ratio2->Draw("e1psame");
-  //  graph_ratio2 = convertToGraph(histogram_ratio2, 0.);
-  //  graph_ratio2->Draw("P");
-  //}
-
   TH1* histogram_ratio3 = nullptr;
   TGraphAsymmErrors* graph_ratio3 = nullptr;
   if ( histogram3 ) {
@@ -389,10 +368,6 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   delete graph3;
   delete histogram_ratio_ref;
   delete graph_line;
-  //delete histogram_ratio1;
-  //delete graph_ratio1;
-  //delete histogram_ratio2;
-  //delete graph_ratio2;
   delete histogram_ratio3;
   delete graph_ratio3;
   delete topPad;
@@ -433,11 +408,11 @@ void toyMC()
   fillHistogram(histogram_mass, rnd, xMin, xMax, numEvents_signal, mZ, width, numEvents_background, lambda);
   //dumpHistogram(histogram_mass);
 
-  TH1* histogram_gauss = bookHistogram("histogram_mass_exact", "mass, expectation for S", numBins, xMin, xMax);
-  fillHistogram_gauss(histogram_gauss, rnd, numEvents_signal, xMin, xMax, mZ, width);
+  TH1* histogram_gauss = bookHistogram("histogram_gauss", "mass, expectation for S", numBins, xMin, xMax);
+  fillHistogram_gauss_cdf(histogram_gauss, numEvents_signal, mZ, width);
 
-  TH1* histogram_exp = bookHistogram("histogram_mass_exact", "mass, expectation for B", numBins, xMin, xMax);
-  fillHistogram_exp(histogram_exp, rnd, numEvents_background, xMin, xMax, lambda);
+  TH1* histogram_exp = bookHistogram("histogram_exp", "mass, expectation for B", numBins, xMin, xMax);
+  fillHistogram_exp_cdf(histogram_exp, numEvents_background, lambda);
 
   TH1* histogram_sum = bookHistogram("histogram_sum", "mass, expectation for S+B", numBins, xMin, xMax);
   histogram_sum->Add(histogram_gauss);
@@ -459,8 +434,8 @@ void toyMC()
 		 histogram_mass, "(Pseudo)data", 
 		 function_sum, "Gauss + Exp",
 		 "Mass [GeV]", 1.30,
-		 true, 1.e-6, 1.9e+1, "Toys", 1.15,
-		 0.51, 0.74,
+		 true, 1.e0, 1.e+4, "Toys", 1.15,
+		 0.64, 0.71,
 		 "toyMC_random_sampling.png");
 
   RooRealVar observable("observable", "Mass [GeV]", xMin, xMax);
