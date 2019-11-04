@@ -27,7 +27,7 @@
 // define option to randomly sample from mass distribution for signal
 //   1 = use 2-step procedure to sample from Breit-Wigner + Gaussian distribution
 //   2 = sample directly from Voigtian distribution
-const int mode_signal_fill = 2;
+const int mode_signal_fill = 1;
 
 // define option to fit mass distribution for signal
 //   1 = use Fourier transform to compute convolution of Breit-Wigner + Gaussian
@@ -151,7 +151,7 @@ void toyMC_wBonusPart2()
   double lambda = 0.1; // parameter of exp(-lambda*x) distribution for background
 
   TRandom3 rnd;
-  int numToys = 1000;
+  int numToys = 1;
 
   TH1* histogram_numEvents_signal = bookHistogram("histogram_numEvents_signal", "numEvents_signal", 200, 0., 2.*numEvents_signal);
   TH1* histogram_numEventsErr_signal = bookHistogram("histogram_numEventsErr_signal", "numEventsErr_signal", 200, 0., 0.2*numEvents_signal);
