@@ -5,14 +5,19 @@
 #include <RooDataHist.h>
 #include <RooExponential.h>
 #include <RooFFTConvPdf.h>
+#include <RooFormulaVar.h>
 #include <RooGaussian.h>
+#include <RooLognormal.h>
 #include <RooMinuit.h>
 #include <RooPlot.h>
+#include <RooProdPdf.h>
 #include <RooRealVar.h>
 
 #include <TCanvas.h>
 #include <TFile.h>
+#include <TGraph.h>
 #include <TH1.h>
+#include <TLine.h>
 #include <TMath.h>
 #include <TRandom.h>
 #include <TRandom3.h>
@@ -30,13 +35,27 @@ TH1* bookHistogram(const std::string& histogramName, const std::string& histogra
   return histogram;
 }
 
-void fillHistogram(TH1* histogram, TRandom& rnd, double xMin, double xMax, int numEvents_signal, double mZ, double width, int numEvents_background, double lambda)
+double square(double x)
+{
+  return x*x;
+}
+
+void fillHistogram(TH1* histogram, TRandom& rnd, double xMin, double xMax, int numEvents_signal, double mZ, double width, int numEvents_background, double lambda,
+		   double eff_muon, double effErr_muon)
 {
   //std::cout << "<fillHistogram>:" << std::endl;
   //std::cout << " xMin = " << xMin << std::endl;
   //std::cout << " xMax = " << xMax << std::endl;
   int numEvents = numEvents_signal + numEvents_background;
-  int numEvents_rnd = rnd.Poisson(numEvents);
+  assert(eff_muon > 0. && eff_muon <= 1. && effErr_muon >= 0. && effErr_muon <= eff_muon);
+  double eff_muon_rnd = rnd.Gaus(eff_muon, effErr_muon);
+  if ( eff_muon_rnd < 0.01 ) eff_muon_rnd = 0.01;
+  if ( eff_muon_rnd > 1.00 ) eff_muon_rnd = 1.00;
+   // signal yield is affected by muon identification efficiency^2, as each signal event contains two muons
+  double numEvents_signal_rnd = square(eff_muon_rnd/eff_muon)*numEvents_signal; 
+  // assume all muons in background events are genuine muons, so the background yield is affected by muon identification efficiency^2 in the same way as the signal
+  double numEvents_background_rnd = square(eff_muon_rnd/eff_muon)*numEvents_background; 
+  int numEvents_rnd = rnd.Poisson(numEvents_signal_rnd + numEvents_background_rnd);
   double p_signal = numEvents_signal/((double)numEvents);
   for ( int idxEvent = 0; idxEvent < numEvents_rnd; ++idxEvent ) {
     // keep iterating until an event within the given mass range xMin < x < xMax is obtained
@@ -84,7 +103,7 @@ double normal(double x, double mZ, double sigma)
 
 using namespace RooFit;
 
-void toyMC_wBonusPart1()
+void exercise_part04()
 {
   // prevent pop-up windows
   gROOT->SetBatch(true);
@@ -107,6 +126,9 @@ void toyMC_wBonusPart1()
   int numEvents_background = 9000;
   double lambda = 0.1; // parameter of exp(-lambda*x) distribution for background
 
+  double eff_muon = 0.80;
+  double effErr_muon = 0.05*eff_muon; // uncertainty on muon identification efficiency
+
   TRandom3 rnd;
   int numToys = 1000;
 
@@ -116,6 +138,7 @@ void toyMC_wBonusPart1()
   TH1* histogram_numEvents_background = bookHistogram("histogram_numEvents_background", "numEvents_background", 200, 0., 2.*numEvents_background);
   TH1* histogram_numEventsErr_background = bookHistogram("histogram_numEventsErr_background", "numEventsErr_background", 200, 0., 0.2*numEvents_background);
   TH1* histogram_pull_background = bookHistogram("histogram_pull_background", "pull_background", 200, -10., +10.);
+  TH1* histogram_sf_muon = bookHistogram("histogram_sf_muon", "sf_muon", 200, 0., 2.);
 
   for ( int idxToy = 0; idxToy < numToys; ++idxToy ) {
     if ( (idxToy % 100) == 0 ) {
@@ -124,7 +147,7 @@ void toyMC_wBonusPart1()
 
     // generate (pseudo)data
     TH1* histogram_mass = bookHistogram("histogram_mass", "mass", numBins, xMin, xMax);
-    fillHistogram(histogram_mass, rnd, xMin, xMax, numEvents_signal, mZ, width, numEvents_background, lambda);
+    fillHistogram(histogram_mass, rnd, xMin, xMax, numEvents_signal, mZ, width, numEvents_background, lambda, eff_muon, effErr_muon);
     //dumpHistogram(histogram_mass);
     RooRealVar observable("observable", "Mass [GeV]", xMin, xMax);
     RooDataHist data("data", "(Pseudo)data", RooArgList(observable), histogram_mass);
@@ -132,17 +155,29 @@ void toyMC_wBonusPart1()
     // define fit model
     RooRealVar mean_gauss("mean_gauss", "Gaussian mean", mZ, 0.8*mZ, 1.2*mZ);
     RooRealVar sigma_gauss("sigma_gauss", "Gaussian resolution", width, 0., 2.*width);
-    RooGaussian model_S("model_S", "Signal model",observable, mean_gauss, sigma_gauss);
+    RooGaussian model_S("model_S", "Signal model", observable, mean_gauss, sigma_gauss);
 
     RooRealVar lambda_exp("lambda_exp", "Background shape", -lambda, -10.*lambda, 0.);
     RooExponential model_B("pdf_B", "Background model", observable, lambda_exp);
 
     RooRealVar norm_S("norm_S", "Signal yield", numEvents_signal, 0., 2.*histogram_mass->Integral());
     RooRealVar norm_B("norm_B", "Background yield", numEvents_background, 0., 2.*histogram_mass->Integral());
-    RooAddPdf model_SplusB("model_SplusB", "Signal+background model", RooArgList(model_S, model_B), RooArgList(norm_S, norm_B));
+    //-----------------------------------------------------------------------------------------------
+    // create constraint term in likelihood function 
+    // for systematic uncertainty on muon identification efficiency
+    RooRealVar sf_muon("sf_muon", "Data/MC scale-factor for muon identification efficiency", 1., 0., 1./eff_muon);
+    RooConstVar const0("const0", "Constant of value 1", 1.); 
+    RooConstVar const1("const1", "Uncertainty on data/MC scale-factor for muon identification efficiency", effErr_muon/eff_muon);
+    //RooLognormal constraint_muon("constraint_muon", "Constraint on data/MC scale-factor for muon identification efficiency", sf_muon, const0, 1. + const1);
+    RooGaussian constraint_muon("constraint_muon", "Constraint on data/MC scale-factor for muon identification efficiency", sf_muon, const0, const1);
+    //-----------------------------------------------------------------------------------------------
+    RooFormulaVar norm_S_wMuonEff("norm_S_wMuonEff", "Signal yield*muon identification efficiency^2","norm_S*sf_muon*sf_muon", RooArgList(norm_S, sf_muon));
+    RooFormulaVar norm_B_wMuonEff("norm_B_wMuonEff", "Background yield*muon identification efficiency^2","norm_B*sf_muon*sf_muon", RooArgList(norm_B, sf_muon));
+    RooAddPdf model_SplusB("model_SplusB", "Signal+background model", RooArgList(model_S, model_B), RooArgList(norm_S_wMuonEff, norm_B_wMuonEff));
+    RooProdPdf model_SplusB_wMuonEff("model_SplusB_wMuonEff", "Signal+background model with muon identification efficiency uncertainty", model_SplusB, constraint_muon);
     
     // perform fit
-    model_SplusB.fitTo(data, PrintLevel(-1));
+    model_SplusB_wMuonEff.fitTo(data, PrintLevel(-1));
 
     // print signal and background yields determined by fit
     //std::cout << "fit results:" << std::endl;
@@ -183,6 +218,7 @@ void toyMC_wBonusPart1()
     histogram_numEvents_background->Fill(norm_B.getVal());
     histogram_numEventsErr_background->Fill(err_B);
     histogram_pull_background->Fill(pull_B);
+    histogram_sf_muon->Fill(sf_muon.getVal());
 
     // make control plots (1st toy only)
     if ( idxToy == 0 ) {
@@ -190,15 +226,15 @@ void toyMC_wBonusPart1()
       // for the values of signal and background yields determined by fit
       RooPlot* frame1 = observable.frame();
       data.plotOn(frame1);
-      model_SplusB.plotOn(frame1);
-      model_SplusB.plotOn(frame1, Components(model_B), LineStyle(ELineStyle::kDashed));
+      model_SplusB_wMuonEff.plotOn(frame1);
+      model_SplusB_wMuonEff.plotOn(frame1, Components(model_B), LineStyle(ELineStyle::kDashed));
       TCanvas canvas1;
       canvas1.cd();
       frame1->Draw();      
-      canvas1.SaveAs("toyMC_fit.png");
+      canvas1.SaveAs("exercise_part04_fit.png");
       
       // show likelihood function
-      RooAbsReal* nll = model_SplusB.createNLL(data, NumCPU(4));
+      RooAbsReal* nll = model_SplusB_wMuonEff.createNLL(data, NumCPU(4));
       RooMinuit minuit(*nll);
       minuit.setPrintLevel(-1);
       minuit.migrad();      
@@ -207,18 +243,34 @@ void toyMC_wBonusPart1()
       RooAbsReal* nll_profiled = nll->createProfile(norm_S);
       nll_profiled->plotOn(frame2, LineColor(kRed));
       frame2->SetMinimum(0.);
-      frame2->SetMaximum(25.);
+      frame2->SetMaximum(5.);
       TCanvas canvas2;
       canvas2.cd();
+      TGraph* line_1sigma = new TGraph(2);
+      line_1sigma->SetPoint(0, 0.5*numEvents_signal, 1.);
+      line_1sigma->SetPoint(1, 1.5*numEvents_signal, 1.);
+      line_1sigma->SetLineColor(8);
+      line_1sigma->SetLineWidth(1);
+      line_1sigma->SetLineStyle(7);
+      frame2->addObject(line_1sigma);
+      TGraph* line_2sigma = new TGraph(2);
+      line_2sigma->SetPoint(0, 0.5*numEvents_signal, 4.);
+      line_2sigma->SetPoint(1, 1.5*numEvents_signal, 4.);
+      line_2sigma->SetLineColor(8);
+      line_2sigma->SetLineWidth(1);
+      line_2sigma->SetLineStyle(7);
+      frame2->addObject(line_2sigma, "L");
       frame2->Draw();
-      canvas2.SaveAs("toyMC_nll.png");
+      canvas2.SaveAs("exercise_part04_nll.png");
+      //delete line_1sigma;
+      //delete line_2sigma;
     }
 
     delete histogram_mass;
   }
 
   // write histograms to ROOT file
-  TFile* outputFile = new TFile("toyMC.root", "RECREATE");
+  TFile* outputFile = new TFile("exercise_part04.root", "RECREATE");
   outputFile->cd();
   histogram_numEvents_signal->Write();
   histogram_numEventsErr_signal->Write();
@@ -226,5 +278,6 @@ void toyMC_wBonusPart1()
   histogram_numEvents_background->Write();
   histogram_numEventsErr_background->Write();
   histogram_pull_background->Write();
+  histogram_sf_muon->Write();
   delete outputFile;
 }

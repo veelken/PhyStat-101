@@ -1,6 +1,5 @@
 
 #include <TCanvas.h>
-#include <TF1.h>
 #include <TGraph.h>
 #include <TGraphAsymmErrors.h>
 #include <TH1.h>
@@ -8,8 +7,6 @@
 #include <TLine.h>
 #include <TMath.h>
 #include <TPad.h>
-#include <TRandom.h>
-#include <TRandom3.h>
 #include <TROOT.h> // gROOT
 
 #include <string>

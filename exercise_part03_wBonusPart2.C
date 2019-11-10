@@ -124,7 +124,7 @@ double normal(double x, double mZ, double sigma)
 
 using namespace RooFit;
 
-void toyMC_wBonusPart2()
+void exercise_part03_wBonusPart2()
 {
   // prevent pop-up windows
   gROOT->SetBatch(true);
@@ -250,7 +250,7 @@ void toyMC_wBonusPart2()
       TCanvas canvas1;
       canvas1.cd();
       frame1->Draw();      
-      canvas1.SaveAs("toyMC_fit.png");
+      canvas1.SaveAs("exercise_part03_fit.png");
       
       // show likelihood function
       RooAbsReal* nll = model_SplusB.createNLL(data, NumCPU(4));
@@ -266,7 +266,7 @@ void toyMC_wBonusPart2()
       TCanvas canvas2;
       canvas2.cd();
       frame2->Draw();
-      canvas2.SaveAs("toyMC_nll.png");
+      canvas2.SaveAs("exercise_part03_nll.png");
     }
 
     delete histogram_mass;
@@ -274,7 +274,7 @@ void toyMC_wBonusPart2()
   }
 
   // write histograms to ROOT file
-  TFile* outputFile = new TFile("toyMC.root", "RECREATE");
+  TFile* outputFile = new TFile("exercise_part03.root", "RECREATE");
   outputFile->cd();
   histogram_numEvents_signal->Write();
   histogram_numEventsErr_signal->Write();

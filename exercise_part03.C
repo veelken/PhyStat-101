@@ -1,5 +1,16 @@
 
+#include <RooAddPdf.h>
+#include <RooBreitWigner.h>
+#include <RooDataHist.h>
+#include <RooExponential.h>
+#include <RooFFTConvPdf.h>
+#include <RooGaussian.h>
+#include <RooMinuit.h>
+#include <RooPlot.h>
+#include <RooRealVar.h>
+
 #include <TCanvas.h>
+#include <TFile.h>
 #include <TF1.h>
 #include <TGraph.h>
 #include <TGraphAsymmErrors.h>
@@ -24,13 +35,70 @@ TH1* bookHistogram(const std::string& histogramName, const std::string& histogra
   return histogram;
 }
 
+void fillHistogram(TH1* histogram, TRandom& rnd, double xMin, double xMax, int numEvents_signal, double mZ, double width, int numEvents_background, double lambda)
+{
+  //std::cout << "<fillHistogram>:" << std::endl;
+  //std::cout << " xMin = " << xMin << std::endl;
+  //std::cout << " xMax = " << xMax << std::endl;
+  int numEvents = numEvents_signal + numEvents_background;
+  int numEvents_rnd = rnd.Poisson(numEvents);
+  double p_signal = numEvents_signal/((double)numEvents);
+  for ( int idxEvent = 0; idxEvent < numEvents_rnd; ++idxEvent ) {
+    // keep iterating until an event within the given mass range xMin < x < xMax is obtained
+    double x = -1.;
+    do {
+      // determine if next event is signal or background
+      double u = rnd.Rndm();      
+      if ( u < p_signal ) { // event is signal
+	x = rnd.Gaus(mZ, width);
+	//std::cout << "x_gauss = " << x << std::endl;
+      } else { // event is background
+	assert(lambda > 0.);
+	x = rnd.Exp(1./lambda);
+	x += xMin;
+	//std::cout << "x_exp = " << x << std::endl;
+      }
+    } while ( !(x > xMin && x < xMax) );
+    //std::cout << "filling histogram = " << histogram->GetName() << " with x = " << x << std::endl;
+    histogram->Fill(x);
+  }
+}
+
+void dumpHistogram(const TH1* histogram)
+{
+  std::cout << "dumping histogram = " << histogram->GetName() << std::endl;
+  const TAxis* xAxis = histogram->GetXaxis();
+  int numBins = xAxis->GetNbins();
+  double sum = 0.;
+  double sumErr2 = 0.;
+  for ( int idxBin = 1; idxBin <= numBins; ++idxBin ) {
+    double binCenter = xAxis->GetBinCenter(idxBin);
+    double binContent = histogram->GetBinContent(idxBin);
+    double binError = histogram->GetBinError(idxBin);
+    std::cout << "bin #" << idxBin << " @ " << binCenter << ": content = " << binContent << " +/- " << binError << std::endl;
+    sum += binContent;
+    sumErr2 += (binError*binError);
+  }
+  std::cout << "sum = " << sum << " +/- " << TMath::Sqrt(sumErr2) << std::endl;
+}
+
+double normal(double x, double mZ, double sigma)
+{
+  return (1./(TMath::Sqrt(2.*TMath::Pi())*sigma))*TMath::Gaus(x, mZ, sigma);
+}
+
+double sum_fcn(double* x, double* par)
+{
+  return par[0]*normal(x[0], par[1], par[2]) + par[3]*TMath::Exp(-par[4]*(x[0] - par[5]));
+}
+
 double normal_cdf(double x, double mZ, double sigma)
 {
   double t = TMath::Sqrt(0.5)*(x - mZ)/sigma;
   return 0.5*TMath::Erf(t);
 }
 
-void fillHistogram_Erf(TH1* histogram, double mZ, double sigma)
+void fillHistogram_gauss_cdf(TH1* histogram, int numEvents, double mZ, double sigma)
 {
   const TAxis* xAxis = histogram->GetXaxis();
   int numBins = xAxis->GetNbins();
@@ -41,93 +109,27 @@ void fillHistogram_Erf(TH1* histogram, double mZ, double sigma)
     histogram->SetBinContent(idxBin, integral);
     histogram->SetBinError(idxBin, 0.);
   }
+  if ( histogram->Integral() > 0. ) {
+    histogram->Scale(numEvents/histogram->Integral());
+  }
 }
 
-//---------------------------------------------------------------------------------------------------
-// TMath::Gaus function does not include the 1/sqrt(2*pi)*sigma term,
-// which is needed for proper normalization required for a probability density function:
-//  integral_{-infinity}^{+infinity} Gaus(x, mZ, sigma) dx = 1,
-// so we define the functions with proper normalization here
-
-double normal(double x, double mZ, double sigma)
+void fillHistogram_exp_cdf(TH1* histogram, int numEvents, double lambda)
 {
-  return (1./(TMath::Sqrt(2.*TMath::Pi())*sigma))*TMath::Gaus(x, mZ, sigma);
-}
-
-double normal_fcn(double* x, double* par)
-{
-  return par[0]*normal(x[0], par[1], par[2]);
-}
-//---------------------------------------------------------------------------------------------------
-
-void fillHistogram_rejection_sampling(TH1* histogram, TRandom& rnd, int numToys, double xMin, double xMax, double mZ, double sigma)
-{
-  double yMax = normal(mZ, mZ, sigma);
-  int idxToy = 0;
-  while ( idxToy < numToys ) {
-    bool isSelectedToy = false;
-    double x;
-    while ( !isSelectedToy ) {
-      x = xMin + (xMax - xMin)*rnd.Rndm();
-      double y = rnd.Rndm()*yMax;
-      if ( y < normal(x, mZ, sigma) ) {
-	isSelectedToy = true;
-      }
-    }
-    histogram->Fill(x);
-    ++idxToy;
+  assert(lambda > 0.);
+  const TAxis* xAxis = histogram->GetXaxis();
+  double xMin = xAxis->GetBinLowEdge(1);
+  std::cout << "xMin = " << xMin << std::endl;
+  int numBins = xAxis->GetNbins();
+  for ( int idxBin = 1; idxBin <= numBins; ++idxBin ) {
+    double binEdge_hi = xAxis->GetBinUpEdge(idxBin);
+    double binEdge_lo = xAxis->GetBinLowEdge(idxBin);
+    double integral = (-1./lambda)*(TMath::Exp(-lambda*(binEdge_hi - xMin)) - TMath::Exp(-lambda*(binEdge_lo - xMin)));
+    histogram->SetBinContent(idxBin, integral);
+    histogram->SetBinError(idxBin, 0.);
   }
   if ( histogram->Integral() > 0. ) {
-    histogram->Scale(1./histogram->Integral());
-  }
-}
-
-void fillHistogram_inverse_transform_sampling(TH1* histogram, TRandom& rnd, int numToys, double xMin, double xMax, double mZ, double sigma)
-{
-  // prepare graph of CDF^-1 (inverse of cumulative distribution function)
-  std::vector<double> points_x;
-  std::vector<double> points_y;
-  const double x_step = 1.e-3;
-  double sum = 0.;
-  for ( double x = xMin; x <= xMax; x += x_step ) {
-    points_x.push_back(x);
-    points_y.push_back(sum);
-    sum += x_step*normal(x, mZ, sigma);
-  }
-  assert(points_x.size() == points_y.size());
-  int numPoints = points_x.size();
-  TGraph* graph_inverse_cdf = new TGraph(numPoints);
-  for ( int idxPoint = 0; idxPoint < numPoints; ++idxPoint ) {
-    // graph of *inverse* of CDF is obtained by swapping x and y
-    graph_inverse_cdf->SetPoint(idxPoint, points_y[idxPoint], points_x[idxPoint]);
-  }
-  for ( int idxToy = 0; idxToy < numToys; ++idxToy ) {
-    double y = rnd.Rndm();
-    double x = graph_inverse_cdf->Eval(y);
-    histogram->Fill(x);
-  }
-  if ( histogram->Integral() > 0. ) {
-    histogram->Scale(1./histogram->Integral());
-  }
-  delete graph_inverse_cdf;
-}
-
-void fillHistogram_rndSum(TH1* histogram, TRandom& rnd, int numToys, double xMin, double xMax, double mZ, double sigma)
-{
-  const int N = 100;
-  double range = TMath::Sqrt(12.*N)*sigma;
-  double a = mZ - 0.5*range;
-  double b = mZ + 0.5*range;
-  for ( int idxToy = 0; idxToy < numToys; ++idxToy ) {
-    double sum = 0.;
-    for ( int i = 0; i < N; ++i ) {
-      sum += a + (b - a)*rnd.Rndm();
-    }
-    double x = sum/N;
-    histogram->Fill(x);
-  }
-  if ( histogram->Integral() > 0. ) {
-    histogram->Scale(1./histogram->Integral());
+    histogram->Scale(numEvents/histogram->Integral());
   }
 }
 
@@ -228,7 +230,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   int markerStyles[6] = { 24, 21, 20, 21, 22, 23 };
   int markerSizes[6] = { 1, 1, 1, 1, 1, 1 };
 
-  TLegend* legend = new TLegend(legendX0, legendY0, legendX0 + 0.26, legendY0 + 0.20, "", "brNDC"); 
+  TLegend* legend = new TLegend(legendX0, legendY0, legendX0 + 0.26, legendY0 + 0.23, "", "brNDC"); 
   legend->SetBorderSize(0);
   legend->SetFillColor(0);
   legend->SetTextSize(0.045);
@@ -259,27 +261,23 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   TGraphAsymmErrors* graph1 = nullptr;
   if ( histogram1 ) {
     histogram1->SetLineColor(colors[1]);
-    histogram1->SetLineWidth(1);
+    histogram1->SetLineWidth(2);
     histogram1->SetMarkerColor(colors[1]);
     histogram1->SetMarkerStyle(markerStyles[1]);
     histogram1->SetMarkerSize(markerSizes[1]);
-    //histogram1->Draw("e1psame");
-    graph1 = convertToGraph(histogram1, -0.25);
-    graph1->Draw("P");
-    legend->AddEntry(histogram1, legendEntry1.data(), "p");
+    histogram1->Draw("histsame");
+    legend->AddEntry(histogram1, legendEntry1.data(), "l");
   }
   
   TGraphAsymmErrors* graph2 = nullptr;
   if ( histogram2 ) {
     histogram2->SetLineColor(colors[2]);
-    histogram2->SetLineWidth(1);
+    histogram2->SetLineWidth(2);
     histogram2->SetMarkerColor(colors[2]);
     histogram2->SetMarkerStyle(markerStyles[2]);
     histogram2->SetMarkerSize(markerSizes[2]);
-    //histogram2->Draw("e1psame");
-    graph2 = convertToGraph(histogram2, 0.);
-    graph2->Draw("P");
-    legend->AddEntry(histogram2, legendEntry2.data(), "p");
+    histogram2->Draw("histsame");
+    legend->AddEntry(histogram2, legendEntry2.data(), "l");
   }
 
   TGraphAsymmErrors* graph3 = nullptr;
@@ -342,26 +340,6 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   graph_line->SetLineWidth(1);
   graph_line->Draw("L");
 
-  TH1* histogram_ratio1 = nullptr;
-  TGraphAsymmErrors* graph_ratio1 = nullptr; 
-  if ( histogram1 ) {
-    std::string histogramName_ratio1 = std::string(histogram1->GetName()).append("_div_").append(histogram_ref->GetName());
-    histogram_ratio1 = compRatioHistogram(histogramName_ratio1, histogram1, histogram_ref);
-    //histogram_ratio1->Draw("e1psame");
-    graph_ratio1 = convertToGraph(histogram_ratio1, -0.25);
-    graph_ratio1->Draw("P");
-  }
-
-  TH1* histogram_ratio2 = nullptr;
-  TGraphAsymmErrors* graph_ratio2 = nullptr;
-  if ( histogram2 ) {
-    std::string histogramName_ratio2 = std::string(histogram2->GetName()).append("_div_").append(histogram_ref->GetName());
-    histogram_ratio2 = compRatioHistogram(histogramName_ratio2, histogram2, histogram_ref);
-    //histogram_ratio2->Draw("e1psame");
-    graph_ratio2 = convertToGraph(histogram_ratio2, 0.);
-    graph_ratio2->Draw("P");
-  }
-
   TH1* histogram_ratio3 = nullptr;
   TGraphAsymmErrors* graph_ratio3 = nullptr;
   if ( histogram3 ) {
@@ -390,10 +368,6 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   delete graph3;
   delete histogram_ratio_ref;
   delete graph_line;
-  delete histogram_ratio1;
-  delete graph_ratio1;
-  delete histogram_ratio2;
-  delete graph_ratio2;
   delete histogram_ratio3;
   delete graph_ratio3;
   delete topPad;
@@ -402,10 +376,15 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
 }
 //---------------------------------------------------------------------------------------------------
 
-void rndNumGen()
+using namespace RooFit;
+
+void exercise_part03()
 {
   // prevent pop-up windows
   gROOT->SetBatch(true);
+
+  // reduce RooFit print-out
+  RooMsgService::instance().setGlobalKillBelow(RooFit::WARNING);
 
   // define binning
   // (30 bins from 60 to 120 GeV)
@@ -413,45 +392,125 @@ void rndNumGen()
   double xMin =  60.; // GeV
   double xMax = 120.; // GeV
 
-  // define mass of Z boson
+  // define mass and (intrinsic) width of Z boson
   // (taken from http://pdg.lbl.gov/2018/listings/rpp2018-list-z-boson.pdf )
   double mZ    = 91.2; // GeV
   double width =  4.5; // GeV (includes intrinsic width of Z boson + experimental resolution)
 
-  TF1* function_Gaussian = new TF1("function_Gaussian", normal_fcn, xMin, xMax, 2);
-  function_Gaussian->SetParameter(0, (xMax - xMin)/numBins);
-  function_Gaussian->SetParameter(1, mZ);
-  function_Gaussian->SetParameter(2, width);
-
-  TH1* histogram_Erf = bookHistogram("histogram_Erf", "Exact solution", numBins, xMin, xMax);
-  fillHistogram_Erf(histogram_Erf, mZ, width);
+  int numEvents_signal = 1000;
+  int numEvents_background = 9000;
+  double lambda = 0.1; // parameter of exp(-lambda*x) distribution for background
 
   TRandom3 rnd;
-  int numToys = 100000;
 
-  TH1* histogram_rejection = bookHistogram("histogram_rejection", "Rejection sampling", numBins, xMin, xMax);
-  fillHistogram_rejection_sampling(histogram_rejection, rnd, numToys, xMin, xMax, mZ, width);
+  // generate (pseudo)data
+  TH1* histogram_mass = bookHistogram("histogram_mass", "mass", numBins, xMin, xMax);
+  fillHistogram(histogram_mass, rnd, xMin, xMax, numEvents_signal, mZ, width, numEvents_background, lambda);
+  //dumpHistogram(histogram_mass);
 
-  TH1* histogram_inverse_transform = bookHistogram("histogram_inverse_transform", "Inverse-transform sampling", numBins, xMin, xMax);
-  fillHistogram_inverse_transform_sampling(histogram_inverse_transform, rnd, numToys, xMin, xMax, mZ, width);
+  TH1* histogram_gauss = bookHistogram("histogram_gauss", "mass, expectation for S", numBins, xMin, xMax);
+  fillHistogram_gauss_cdf(histogram_gauss, numEvents_signal, mZ, width);
 
-  TH1* histogram_rndSum = bookHistogram("histogram_rndSum", "#Sigma u", numBins, xMin, xMax);
-  fillHistogram_rndSum(histogram_rndSum, rnd, numToys, xMin, xMax, mZ, width);
+  TH1* histogram_exp = bookHistogram("histogram_exp", "mass, expectation for B", numBins, xMin, xMax);
+  fillHistogram_exp_cdf(histogram_exp, numEvents_background, lambda);
 
+  TH1* histogram_sum = bookHistogram("histogram_sum", "mass, expectation for S+B", numBins, xMin, xMax);
+  histogram_sum->Add(histogram_gauss);
+  histogram_sum->Add(histogram_exp);
+
+  TF1* function_sum = new TF1("function_sum", sum_fcn, xMin, xMax, 6);
+  function_sum->SetParameter(0, numEvents_signal/(numEvents_signal + numEvents_background)*((xMax - xMin)/numBins));
+  function_sum->SetParameter(1, mZ);
+  function_sum->SetParameter(2, width);
+  function_sum->SetParameter(3, numEvents_background/(numEvents_signal + numEvents_background)*((xMax - xMin)/numBins));
+  function_sum->SetParameter(4, lambda);
+  function_sum->SetParameter(5, xMin);
+
+  // compare generated (pseudo)data to expected mass distribution for signal + background
   showHistograms(800, 900,
-		 histogram_Erf, "Exact solution",
-		 histogram_rejection, "Rejection sampling", 
-		 histogram_inverse_transform, "Inverse-transform sampling", 
-		 histogram_rndSum, "#Sigma u", 
-		 function_Gaussian, "Gaussian",
+		 histogram_sum, "S+B Expectation",
+		 histogram_gauss, "S Expectation", 
+		 histogram_exp, "B Expectation", 
+		 histogram_mass, "(Pseudo)data", 
+		 function_sum, "Gauss + Exp",
 		 "Mass [GeV]", 1.30,
-		 true, 1.e-6, 1.9e+1, "Toys", 1.15,
-		 0.51, 0.74,
-		 "rndNumGen.png");
+		 true, 1.e0, 1.e+4, "Toys", 1.15,
+		 0.64, 0.71,
+		 "exercise_part03_random_sampling.png");
 
-  delete function_Gaussian;
-  delete histogram_Erf;
-  delete histogram_rejection;
-  delete histogram_inverse_transform;
-  delete histogram_rndSum;
+  RooRealVar observable("observable", "Mass [GeV]", xMin, xMax);
+  RooDataHist data("data", "(Pseudo)data", RooArgList(observable), histogram_mass);
+
+  // define fit model
+  RooRealVar mean_gauss("mean_gauss", "Gaussian mean", mZ, 0.8*mZ, 1.2*mZ);
+  RooRealVar sigma_gauss("sigma_gauss", "Gaussian resolution", width, 0., 2.*width);
+  RooGaussian model_S("model_S", "Signal model", observable, mean_gauss, sigma_gauss);
+
+  RooRealVar lambda_exp("lambda_exp", "Background shape", -lambda, -10.*lambda, 0.);
+  RooExponential model_B("pdf_B", "Background model", observable, lambda_exp);
+
+  RooRealVar norm_S("norm_S", "Signal yield", numEvents_signal, 0., 2.*histogram_mass->Integral());
+  RooRealVar norm_B("norm_B", "Background yield", numEvents_background, 0., 2.*histogram_mass->Integral());
+  RooAddPdf model_SplusB("model_SplusB", "Signal+background model", RooArgList(model_S, model_B), RooArgList(norm_S, norm_B));
+    
+  // perform fit
+  model_SplusB.fitTo(data, PrintLevel(-1));
+
+  // print signal and background yields determined by fit
+  //std::cout << "fit results:" << std::endl;
+  //std::cout << " S = " << norm_S.getVal();
+  double pull_S;
+  if ( norm_S.hasAsymError() ) {
+    //std::cout << " + " << norm_S.getErrorHi() << " - " << norm_S.getErrorLo();
+    if ( norm_S.getVal() > numEvents_signal ) {
+      pull_S = (norm_S.getVal() - numEvents_signal)/norm_S.getErrorHi();
+    } else {
+      pull_S = (norm_S.getVal() - numEvents_signal)/norm_S.getErrorLo();
+    }
+  } else {
+    //std::cout << " +/- " << norm_S.getError();
+    pull_S = (norm_S.getVal() - numEvents_signal)/norm_S.getError();
+  }
+  //std::cout << std::endl;
+  //std::cout << " B = " << norm_B.getVal();
+  double pull_B;
+  if ( norm_B.hasAsymError() ) {
+    //std::cout << " + " << norm_B.getErrorHi() << " - " << norm_B.getErrorLo();
+    if ( norm_B.getVal() > numEvents_background ) {
+      pull_B = (norm_B.getVal() - numEvents_background)/norm_B.getErrorHi();
+    } else {
+      pull_B = (norm_B.getVal() - numEvents_background)/norm_B.getErrorLo();
+    }
+  } else {
+    //std::cout << " +/- " << norm_B.getError();
+    pull_B = (norm_B.getVal() - numEvents_background)/norm_B.getError();
+  }
+  //std::cout << std::endl;
+  
+  // make control plot of (pseudo)data versus fit model,
+  // for the values of signal and background yields determined by fit
+  RooPlot* frame1 = observable.frame();
+  data.plotOn(frame1);
+  model_SplusB.plotOn(frame1);
+  model_SplusB.plotOn(frame1, Components(model_B), LineStyle(ELineStyle::kDashed));
+  TCanvas canvas1;
+  canvas1.cd();
+  frame1->Draw();      
+  canvas1.SaveAs("exercise_part03_fit.png");
+      
+  // make control plot of likelihood function
+  RooAbsReal* nll = model_SplusB.createNLL(data, NumCPU(4));
+  RooMinuit minuit(*nll);
+  minuit.setPrintLevel(-1);
+  minuit.migrad();      
+  RooPlot* frame2 = norm_S.frame(Bins(10), Range(0.5*numEvents_signal, 1.5*numEvents_signal));
+  nll->plotOn(frame2, ShiftToZero());
+  RooAbsReal* nll_profiled = nll->createProfile(norm_S);
+  nll_profiled->plotOn(frame2, LineColor(kRed));
+  frame2->SetMinimum(0.);
+  frame2->SetMaximum(25.);
+  TCanvas canvas2;
+  canvas2.cd();
+  frame2->Draw();
+  canvas2.SaveAs("exercise_part03_nll.png");
 }
